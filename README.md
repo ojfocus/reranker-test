@@ -1,332 +1,215 @@
-# Transformers.js Multi-Model Reranker Benchmark
+# reranker-test
 
-A comprehensive, single-file benchmarking suite for cross-encoder reranking models using Transformers.js in Node.js. Now supports multiple models including MS-MARCO and MixedBread AI models.
+Cross-encoder document reranking with Transformers.js. This repo provides a small, production-ready API for semantic reranking and a comprehensive test/benchmark suite to validate quality and performance across models.
 
-## Features
+- Library: @xenova/transformers (ONNX/WASM, CPU-friendly)
+- Default model: mixedbread-ai/mxbai-rerank-xsmall-v1 (confident, smaller batches)
+- Alternative: Xenova/ms-marco-MiniLM-L-6-v2 (fast, general purpose)
 
-- **Multi-Model Support**: Switch between different reranking models seamlessly
-- **Single Test Runner**: One comprehensive test file handles everything
-- **Multiple Test Modes**: Quick validation, standard suite, or full benchmark  
-- **Model Loading**: Automatic loading and caching of cross-encoder models
-- **Concurrent Model Support**: Load and use multiple models simultaneously
-- **Reranking**: Process query-passage pairs and rank passages by relevance
-- **Comprehensive Metrics**: Calculate precision, improvement over random, throughput
-- **Performance Timing**: Measure latency and processing speed
-- **Detailed Reporting**: Generate comprehensive reports with visual results
-- **Centralized Test Data**: Reusable, categorized document pools for consistent testing
 
-## Supported Models
+## What’s inside
 
-- **Xenova/ms-marco-MiniLM-L-6-v2** (default): Well-established MS-MARCO trained model
-- **mixedbread-ai/mxbai-rerank-xsmall-v1**: High-quality compact reranking model
-- Any compatible cross-encoder model available in Transformers.js
+- `reranker.js` — Production API with batching, multi-model cache, logging
+- `test-suite.js` — End-to-end tests, metrics (NDCG, MRR, Precision@K, Recall@K), and benchmark scenarios
+- `models/` — Optional local cache of models for offline/fast startup
+  - `mixedbread-ai/mxbai-rerank-xsmall-v1/`
+  - `Xenova/ms-marco-MiniLM-L-6-v2/`
 
-## Installation
 
-1. Clone or set up the project:
-   ```bash
-   npm install
-   ```
+## Requirements
 
-2. The project uses ES modules, so make sure `"type": "module"` is in your `package.json`.
+- Node.js 18+ (ES modules enabled via `"type": "module"`)
+- Internet access on first run unless models are pre-cached in `./models`
+- Windows, macOS, or Linux. No GPU required (runs via ONNX/WASM).
 
-## Project Structure
 
-```
-reranker-test/
-├── reranker.js          # Complete multi-model reranker implementation
-├── example-usage.js     # Multi-model usage examples
-├── models/              # Model cache directory (created automatically)  
-├── package.json
-└── README.md
+## Install
+
+In the project root:
+
+```powershell
+npm install
 ```
 
-## Usage
+This installs `@xenova/transformers` (see `package.json`).
 
-### Quick Start
 
-1. **Quick validation test** (~30 seconds):
-   ```bash
-## Usage
+## Quick start (programmatic API)
 
-### Running Tests
+The API centers on `NativeEmbeddingReranker`, which loads a cross-encoder model and ranks documents against a query.
 
-1. **Quick validation test** (~30 seconds):
-   ```bash
-   node reranker.js --quick
-   ```
-
-2. **Standard test suite** (~2-3 minutes):
-   ```bash
-   node reranker.js
-   ```
-
-3. **Full comprehensive benchmark** (~5-10 minutes):
-   ```bash
-   node reranker.js --full
-   ```
-
-### Using as a Module
-
-#### Default Model (MS-MARCO)
-```javascript
+```js
 import { NativeEmbeddingReranker } from './reranker.js';
 
-const reranker = new NativeEmbeddingReranker();
-await reranker.initialize();
-
-const query = "How does machine learning work?";
-const documents = [
-  "Machine learning trains algorithms on data to recognize patterns.",
-  "Photosynthesis is how plants create energy from sunlight.",
-  "Cloud platforms provide scalable AI infrastructure."
-];
-
-const results = await reranker.rerank(query, documents, { topK: 3 });
-console.log(results);
-```
-
-#### Specifying a Model
-```javascript
-// Using MixedBread AI model
 const reranker = new NativeEmbeddingReranker({
-  model: 'mixedbread-ai/mxbai-rerank-xsmall-v1'
-});
-await reranker.initialize();
-
-// Using MS-MARCO model explicitly
-const msMarcoReranker = new NativeEmbeddingReranker({
-  model: 'Xenova/ms-marco-MiniLM-L-6-v2'
-});
-await msMarcoReranker.initialize();
-```
-
-#### Multiple Models Simultaneously
-```javascript
-// Load different models for different use cases
-const generalReranker = new NativeEmbeddingReranker({
-  model: 'Xenova/ms-marco-MiniLM-L-6-v2'
-});
-
-const compactReranker = new NativeEmbeddingReranker({
-  model: 'mixedbread-ai/mxbai-rerank-xsmall-v1'
-});
-
-await Promise.all([
-  generalReranker.initialize(),
-  compactReranker.initialize()
-]);
-
-// Use both models independently
-const generalResults = await generalReranker.rerank(query, documents);
-const compactResults = await compactReranker.rerank(query, documents);
-```
-
-#### Custom Cache Directory
-```javascript
-const reranker = new NativeEmbeddingReranker({
+  // Optional overrides shown with defaults
   model: 'mixedbread-ai/mxbai-rerank-xsmall-v1',
-  cacheDir: './custom-model-cache'
+  cacheDir: null,         // null → uses "./models" under the current working directory
+  logLevel: 'info',       // 'debug' | 'info' | 'warn' | 'error' | 'silent'
 });
-```
 
-### Running the Example
-```bash
-node example-usage.js
-```
+await reranker.initialize();
 
-## Test Data Module
-
-The project includes a centralized test data module for consistent testing:
-
-### Available Test Queries
-
-- `ai_ml_fundamentals` - "How does machine learning and artificial intelligence work?"
-- `photosynthesis` - "What is photosynthesis and how do plants create energy?"
-- `software_development` - "How does artificial intelligence work in software development?"
-- `climate_change` - "Climate change effects on global weather patterns"
-
-### Document Categories
-
-- `core_ai_ml` - High-quality AI/ML concept explanations
-- `tech_applications` - AI applications in technology
-- `data_science_business` - Data science and business analytics
-- `hard_science` - Biology, chemistry, physics topics
-- `humanities` - History, literature, arts
-- `health_lifestyle` - Health, fitness, wellness topics
-
-### Usage Example
-
-```javascript
-import { TEST_QUERIES, generateTestCandidates } from './reranker.js';
-
-// Generate 20 test candidates for AI/ML query
-const candidates = generateTestCandidates('ai_ml_fundamentals', 20, {
-  highRelevanceRatio: 0.4,   // 40% high relevance
-  mediumRelevanceRatio: 0.3, // 30% medium relevance  
-  lowRelevanceRatio: 0.3     // 30% low relevance
-});
-```
-- `npm run quick-test` - Run benchmark with small dataset (2 queries)
-- `npm start` - Run full benchmark with complete dataset (5 queries)
-- `npm run benchmark` - Alias for `npm start`
-
-### Custom Usage
-
-You can also import and use the benchmark programmatically:
-
-```javascript
-import { Benchmark } from './src/benchmark.js';
-
-const benchmark = new Benchmark();
-const results = await benchmark.runBenchmark();
-```
-
-Or use individual components:
-
-```javascript
-import { ModelLoader } from './src/model.js';
-import { Reranker } from './src/reranker.js';
-
-// Initialize model
-const modelLoader = new ModelLoader();
-await modelLoader.initialize();
-
-// Rank passages
-const reranker = new Reranker(modelLoader);
-const query = "How many people live in Berlin?";
-const passages = [
-  "Berlin has a population of 3,520,031 registered inhabitants.",
-  "New York City is famous for the Metropolitan Museum of Art."
+const query = 'How does AI work?';
+const documents = [
+  'Machine learning uses data to train models.',
+  'Gardening tips for spring flowers.',
+  'Neural networks learn hierarchical features.',
 ];
 
-const result = await reranker.rankPassages(query, passages);
-console.log('Ranked passages:', result.rankedPassages);
+const results = await reranker.rerank(query, documents, { topK: 2, batchSize: 128 });
+console.log(results);
+// [
+//   { _rerank_corpus_id, _rerank_score, text, ...originalProps },
+//   ...
+// ]
+
+reranker.dispose(); // optional: free model from memory in long-running apps
 ```
 
-## Dataset Format
+Input formats for `documents`:
+- Array of strings: `["doc text", ...]`
+- Array of objects: `[{ text: "doc text", ...customFields }]`
+- Mixed arrays are supported. Any extra fields are preserved in the output.
 
-The dataset should be a JSON array with the following structure:
+Output fields added by the reranker:
+- `_rerank_corpus_id`: original index in the input array
+- `_rerank_score`: relevance score (higher is more relevant)
+
+
+## Switching models
+
+```js
+// Fast, general-purpose
+const fast = new NativeEmbeddingReranker({ model: 'Xenova/ms-marco-MiniLM-L-6-v2' });
+await fast.initialize();
+
+// Higher confidence, often slower
+const precise = new NativeEmbeddingReranker({ model: 'mixedbread-ai/mxbai-rerank-xsmall-v1' });
+await precise.initialize();
+```
+
+Under the hood, the reranker:
+- Uses sigmoid for single-logit models (e.g., many MS-MARCO-style heads)
+- Uses softmax and the positive class probability for multi-logit models (auto-detected using `config.id2label`)
+
+
+## Caching and offline use
+
+- By default, model files are cached under `./models` (relative to the process working directory).
+- If the model isn’t found locally, `@xenova/transformers` will download it on first use.
+- To run fully offline, place the model files in the expected folder structure:
+
+```
+models/
+  mixedbread-ai/
+    mxbai-rerank-xsmall-v1/
+      config.json
+      tokenizer.json
+      tokenizer_config.json
+      onnx/
+        model_quantized.onnx
+  Xenova/
+    ms-marco-MiniLM-L-6-v2/
+      config.json
+      tokenizer.json
+      tokenizer_config.json
+      onnx/
+        model_quantized.onnx
+```
+
+Tips:
+- You can change the cache location via the `cacheDir` constructor option.
+- Multiple `NativeEmbeddingReranker` instances that use the same `model` share one in-memory cache (via `ModelLoader`).
+
+
+## Extended API
+
+```js
+import { NativeEmbeddingReranker, ModelLoader } from './reranker.js';
+
+const reranker = new NativeEmbeddingReranker({ logLevel: 'debug' });
+await reranker.preload();        // alias of initialize() with service-style logging
+const info = reranker.getModelInfo();
+console.log(info);
+// { currentModel, isLoaded, cacheDirectory, totalCachedModels, cachedModels, logLevel }
+
+reranker.dispose();              // unloads the current model from memory
+
+// Static cache utilities
+ModelLoader.getCachedModels();   // [ 'mixedbread-ai/mxbai-rerank-xsmall-v1', ... ]
+ModelLoader.clearCache();        // clear all cached models
+ModelLoader.clearCache('Xenova/ms-marco-MiniLM-L-6-v2'); // clear one
+```
+
+
+## Benchmark and test suite
+
+`test-suite.js` runs scenario-based benchmarks with accuracy metrics. Use Node directly:
+
+```powershell
+# Standard suite (4 scenarios)
+node .\test-suite.js
+
+# Quick validation (1 scenario)
+node .\test-suite.js --quick
+
+# Full comprehensive suite (8 scenarios)
+node .\test-suite.js --full
+```
+
+What you’ll see per scenario:
+- Candidate distribution (high/medium/low relevance)
+- Throughput and total time
+- NDCG@k, MRR@k, Precision@k, Recall@k
+- Top-K results with scores
+- Summary across all scenarios (averages and throughput)
+
+Note: `package.json` currently maps some scripts to `reranker.js`; use the commands above to run the test suite directly. If you prefer npm scripts, you can add:
 
 ```json
-[
-  {
-    "query": "What is the capital of Germany?",
-    "positive_passages": [
-      "Berlin is the capital of Germany...",
-      "Germany's capital city is Berlin..."
-    ],
-    "negative_passages": [
-      "Paris is the capital of France...",
-      "London is the capital city of England..."
-    ]
+{
+  "scripts": {
+    "bench": "node test-suite.js",
+    "bench:quick": "node test-suite.js --quick",
+    "bench:full": "node test-suite.js --full"
   }
-]
+}
 ```
 
-## Evaluation Metrics
 
-The benchmark calculates several metrics at different cutoff values (k=1,3,5,10):
+## Performance notes
 
-- **MRR@k**: Mean Reciprocal Rank - measures the rank of the first relevant document
-- **NDCG@k**: Normalized Discounted Cumulative Gain - measures ranking quality with position discounting
-- **Precision@k**: Fraction of retrieved documents that are relevant
-- **Recall@k**: Fraction of relevant documents that are retrieved
+- Batch processing is enabled; tune `batchSize` to balance memory vs. speed.
+- Mixedbread model tends to produce higher-confidence scores but may process fewer docs/sec than MS-MARCO.
+- First run of a model includes download and warmup; subsequent runs are faster due to cache.
 
-## Output
 
-The benchmark generates:
+## Troubleshooting
 
-1. **Console Output**: Real-time progress and final results
-2. **JSON Results** (`results/benchmark_results.json`): Detailed results in JSON format
-3. **Text Report** (`results/benchmark_report.txt`): Human-readable report
+- Model download is slow or blocked
+  - Pre-download the model files and place them under `./models` as shown above.
+  - Or set a custom `cacheDir` to a location you control.
 
-## Sample Output
+- ESM import errors (e.g., "Cannot use import statement outside a module")
+  - Ensure Node 18+ and that `package.json` contains `{ "type": "module" }`.
 
-```
-=== EVALUATION METRICS ===
+- No results or empty output
+  - `rerank()` returns `[]` when `documents` is empty; verify your inputs.
 
-MRR:
-  MRR@1: 85.00%
-  MRR@3: 85.00%
-  MRR@5: 85.00%
-  MRR@10: 85.00%
+- Memory usage is high in long-running apps
+  - Call `reranker.dispose()` when switching models or shutting down to free memory.
 
-NDCG:
-  NDCG@1: 85.00%
-  NDCG@3: 92.14%
-  NDCG@5: 94.23%
-  NDCG@10: 95.67%
+- Windows path tips
+  - Use PowerShell-friendly paths like `node .\test-suite.js` when running commands from the project root.
 
-=== TIMING REPORT ===
-Average Latency per Query: 1234.56ms
-Queries Processed: 5
-Average Throughput: 0.81 queries/second
-```
-
-## Model Information
-
-- **Model**: Xenova/ms-marco-MiniLM-L-6-v2
-- **Base Model**: microsoft/MiniLM-L12-H384-uncased
-- **Original**: cross-encoder/ms-marco-MiniLM-L6-v2 (converted to ONNX for web compatibility)
-- **Type**: Cross-encoder for passage reranking
-- **Framework**: Transformers.js (@xenova/transformers)
-- **Task**: Text classification for relevance scoring
-- **Format**: ONNX weights optimized for JavaScript runtime
-- **Input**: Query-passage pairs as [query, passage] arrays
-- **Output**: Relevance scores (higher = more relevant)
-
-### Model Details
-This model is specifically optimized for MS MARCO passage reranking. It takes a query and a passage as input and outputs a relevance score. The model was trained on the MS MARCO dataset to distinguish between relevant and non-relevant query-passage pairs.
-
-**Important Implementation Notes:**
-- Uses the lower-level `AutoModelForSequenceClassification` API to access raw logits
-- Returns continuous relevance scores (not just binary classification)  
-- Positive scores indicate relevance, negative scores indicate irrelevance
-- Higher absolute values indicate stronger confidence in the prediction
-- Batch processing is supported for efficient inference
-
-## Performance Considerations
-
-- The model downloads and caches automatically on first run (~45MB ONNX model)
-- Subsequent runs will be faster as the model is cached locally
-- Processing time depends on the number and length of passages
-- Batch processing is used for efficiency
-- Expected output: Higher scores indicate higher relevance (typically ranging from negative to positive values)
-- Model handles input sequences up to 512 tokens (query + passage combined)
-
-### Expected Performance
-Based on the model's design:
-- **Accuracy**: Optimized for MS MARCO passage ranking task
-- **Speed**: Lightweight 6-layer architecture for faster inference
-- **Input Limits**: Query + passage should not exceed 512 tokens combined
-- **Score Range**: Relevance scores can be positive (relevant) or negative (not relevant)
-- **Score Interpretation**: Higher positive scores = more relevant, lower negative scores = less relevant
-- **Typical Range**: Scores often range from -15 to +15, but can vary based on query complexity
-
-## Customization
-
-### Custom Dataset
-
-Replace `data/dataset.json` with your own dataset following the required format.
-
-### Custom Metrics
-
-Modify the `kValues` parameter in the benchmark to evaluate different cutoff points:
-
-```javascript
-const results = await benchmark.runBenchmark([1, 5, 10, 20]);
-```
-
-### Adding New Metrics
-
-Extend the `EvaluationMetrics` class in `src/metrics.js` to add new evaluation metrics.
-
-## Dependencies
-
-- `@xenova/transformers`: For running the cross-encoder model
-- Node.js built-in modules: `fs`, `path`, `url`
 
 ## License
 
-ISC
+ISC (see `package.json`).
+
+
+## Acknowledgements
+
+- Transformers.js by Xenova
+- Mixedbread AI and MS MARCO reranking models
