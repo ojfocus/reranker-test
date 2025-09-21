@@ -2,6 +2,11 @@ import { AutoTokenizer, AutoModelForSequenceClassification } from '@xenova/trans
 import path from 'path';
 import fs from 'fs';
 
+// --- New: Safe high-resolution timer with a fallback ---
+const now = (typeof performance !== 'undefined' && performance.now) 
+  ? () => performance.now() 
+  : () => Date.now();
+
 /**
  * ====================================================================
  * RERANKER MODULE - Production reranking API
@@ -35,7 +40,7 @@ class ModelLoader {
   static #tokenizers = new Map();
   static #initializationPromises = new Map();
 
-  constructor({ modelName, cacheDir = null }) {
+  constructor({ modelName, cacheDir = null, logger = null }) {
     if (!modelName) throw new Error("A model name must be provided.");
     this.modelName = modelName;
     
@@ -44,63 +49,25 @@ class ModelLoader {
       ? path.resolve(cacheDir)
       : path.resolve(process.cwd(), 'models'); // Default to a local 'models' folder
 
+    // Set up logger (use default if none provided)
+    this.logger = logger || {
+      debug: (msg) => console.debug(`[DEBUG] ${msg}`),
+      info: (msg) => console.info(`[INFO] ${msg}`),
+      warn: (msg) => console.warn(`[WARN] ${msg}`),
+      error: (msg) => console.error(`[ERROR] ${msg}`)
+    };
+
     // Ensure the cache directory exists
     if (!fs.existsSync(this.cacheDir)) {
       fs.mkdirSync(this.cacheDir, { recursive: true });
     }
 
-    // More robust check for model existence - look for actual model files
-    // Transformers.js creates nested directories like: models/mixedbread-ai/mxbai-rerank-xsmall-v1/
-    const modelPath = path.resolve(this.cacheDir, this.modelName);
-    this.modelDownloaded = this.checkModelExists(modelPath);
-    console.log(`[ModelLoader] Initialized for model "${this.modelName}" with cache: ${this.cacheDir}`);
+    // The 'from_pretrained' function will handle checking the cache automatically.
+    // No need for a manual check.
+    this.logger.info(`[ModelLoader] Initialized for model "${this.modelName}" with cache: ${this.cacheDir}`);
   }
 
-  /**
-   * Check if model files exist in the cache directory
-   * @param {string} modelPath - Path to the model directory
-   * @returns {boolean} - True if model appears to be downloaded
-   */
-  checkModelExists(modelPath) {
-    // Check for key files that indicate a complete model download
-    const requiredFiles = ['config.json', 'tokenizer.json'];
-    const optionalFiles = ['tokenizer_config.json'];
-    
-    // First check if the model directory exists
-    if (!fs.existsSync(modelPath)) {
-      return false;
-    }
 
-    // Check for required files
-    const hasRequiredFiles = requiredFiles.every(file => 
-      fs.existsSync(path.join(modelPath, file))
-    );
-
-    if (!hasRequiredFiles) {
-      return false;
-    }
-
-    // Check for model files (could be .bin, .safetensors, or in onnx/ subdirectory)
-    const modelFiles = fs.readdirSync(modelPath);
-    const hasModelWeights = modelFiles.some(file => 
-      file.endsWith('.bin') || 
-      file.endsWith('.safetensors') ||
-      file === 'onnx' // ONNX models are in a subdirectory
-    );
-
-    // If there's an onnx directory, check for model files inside it
-    if (!hasModelWeights && modelFiles.includes('onnx')) {
-      const onnxPath = path.join(modelPath, 'onnx');
-      try {
-        const onnxFiles = fs.readdirSync(onnxPath);
-        return onnxFiles.some(file => file.endsWith('.onnx'));
-      } catch (error) {
-        return false;
-      }
-    }
-
-    return hasModelWeights;
-  }
 
   /**
    * Initialize the cross-encoder model and tokenizer with caching
@@ -109,21 +76,21 @@ class ModelLoader {
   async initialize() {
     // Check if this specific model is already loaded
     if (ModelLoader.#models.has(this.modelName)) {
-      console.log(`[ModelLoader] Model "${this.modelName}" already initialized.`);
+      this.logger.debug(`Model "${this.modelName}" already initialized.`);
       return;
     }
 
     // Check if this specific model is currently being initialized
     if (ModelLoader.#initializationPromises.has(this.modelName)) {
-      console.log(`[ModelLoader] Waiting for "${this.modelName}" initialization to complete...`);
+      this.logger.debug(`Waiting for "${this.modelName}" initialization to complete...`);
       await ModelLoader.#initializationPromises.get(this.modelName);
       return;
     }
 
     const promise = (async () => {
       try {
-        console.log(`[ModelLoader] Loading model: ${this.modelName}...`);
-        const start = performance.now();
+        this.logger.info(`Loading model: ${this.modelName}...`);
+        const start = now();
 
         // Load the model and tokenizer
         const model = await AutoModelForSequenceClassification.from_pretrained(this.modelName, {
@@ -138,12 +105,12 @@ class ModelLoader {
         ModelLoader.#models.set(this.modelName, model);
         ModelLoader.#tokenizers.set(this.modelName, tokenizer);
 
-        const duration = performance.now() - start;
-        console.log(`[ModelLoader] Model "${this.modelName}" loaded in ${duration.toFixed(2)}ms`);
-        console.log(`Model cached at: ${this.cacheDir}`);
+        const duration = now() - start;
+        this.logger.info(`Model "${this.modelName}" loaded in ${duration.toFixed(2)}ms`);
+        this.logger.debug(`Model cached at: ${this.cacheDir}`);
 
       } catch (error) {
-        console.error(`[ModelLoader] Failed to load model "${this.modelName}":`, error);
+        this.logger.error(`Failed to load model "${this.modelName}": ${error.message}`);
         throw error;
       } finally {
         // Clean up the initialization promise
@@ -154,6 +121,17 @@ class ModelLoader {
     // Store the promise so other concurrent calls can wait
     ModelLoader.#initializationPromises.set(this.modelName, promise);
     await promise;
+  }
+
+  // --- New: Pure JavaScript math functions for robustness ---
+  #sigmoid(x) {
+    return 1 / (1 + Math.exp(-x));
+  }
+
+  #softmax(arr) {
+    const exps = arr.map(x => Math.exp(x));
+    const sumExps = exps.reduce((a, b) => a + b);
+    return exps.map(e => e / sumExps);
   }
 
   /**
@@ -175,6 +153,16 @@ class ModelLoader {
     }
 
     try {
+      // --- New: Get the model's configuration to find the positive class ---
+      const config = model.config || {};
+      const id2label = config.id2label || {};
+      const positiveClassIndex = Number(
+        Object.keys(id2label).find(key => 
+          /relevant|positive/i.test(id2label[key]) // Look for "relevant" or "positive"
+        ) ?? 1 // Fallback to 1 if not found
+      );
+      this.logger.debug(`Determined positive class index: ${positiveClassIndex}`);
+
       // Extract queries and passages
       const queries = queryPassagePairs.map(pair => pair[0]);
       const passages = queryPassagePairs.map(pair => pair[1]);
@@ -188,12 +176,32 @@ class ModelLoader {
 
       // Run model inference to get raw logits
       const output = await model(features);
-      
-      // Use tensor operations for efficiency
-      const sigmoidScores = output.logits.sigmoid().tolist();
+      const logits = output.logits;
+      const shape = logits.dims || logits.shape || []; // Get tensor shape
+
+      let scores;
+      const logitsData = logits.tolist(); // Get the raw nested array of numbers
+
+      // The key change: Check the number of output columns (logits)
+      if (shape.length > 1 && shape[1] === 1) {
+        // --- Case 1: Handle single-logit models (like ms-marco) ---
+        // The model outputs one score per document, so we use sigmoid.
+        this.logger.debug('Applying SIGMOID for single-logit model (JS fallback).');
+        // --- Updated: Use the JS helper ---
+        scores = logitsData.map(([logit]) => this.#sigmoid(logit));
+
+      } else {
+        // --- Case 2: Handle multi-logit models (like many modern rerankers) ---
+        // The model outputs a score for each class (e.g., 'not relevant', 'relevant').
+        // We use softmax to get a probability distribution.
+        this.logger.debug('Applying SOFTMAX for multi-logit model (JS fallback).');
+        // --- Updated: Use the JS helper ---
+        const probabilities = logitsData.map(row => this.#softmax(row));
+        scores = probabilities.map(row => row[positiveClassIndex]);
+      }
       
       // Convert to expected format
-      const results = sigmoidScores.map(([score]) => ({
+      const results = scores.map(score => ({
         score: score,
         label: score > 0.5 ? 'RELEVANT' : 'NOT_RELEVANT'
       }));
@@ -201,7 +209,7 @@ class ModelLoader {
       return results;
       
     } catch (error) {
-      console.error('Error getting scores:', error);
+      this.logger.error(`Error getting scores: ${error.message}`);
       throw error;
     }
   }
@@ -231,6 +239,42 @@ class ModelLoader {
    */
   getModelName() {
     return this.modelName;
+  }
+
+  /**
+   * Clear model cache for memory management
+   * @param {string|null} modelNameToClear - Specific model to clear, or null to clear all
+   */
+  static clearCache(modelNameToClear = null) {
+    if (modelNameToClear) {
+      // Clear specific model
+      const wasPresent = ModelLoader.#models.has(modelNameToClear) || ModelLoader.#tokenizers.has(modelNameToClear);
+      ModelLoader.#models.delete(modelNameToClear);
+      ModelLoader.#tokenizers.delete(modelNameToClear);
+      ModelLoader.#initializationPromises.delete(modelNameToClear); // Also clear any pending promises
+      
+      if (wasPresent) {
+        console.log(`[INFO] Cleared cache for model "${modelNameToClear}"`);
+      } else {
+        console.log(`[WARN] Model "${modelNameToClear}" was not found in cache`);
+      }
+    } else {
+      // Clear all models
+      const totalModels = ModelLoader.#models.size;
+      ModelLoader.#models.clear();
+      ModelLoader.#tokenizers.clear();
+      ModelLoader.#initializationPromises.clear();
+      
+      console.log(`[INFO] Cleared cache for all models (${totalModels} models removed)`);
+    }
+  }
+
+  /**
+   * Get information about currently cached models
+   * @returns {Array<string>} Array of cached model names
+   */
+  static getCachedModels() {
+    return Array.from(ModelLoader.#models.keys());
   }
 }
 
@@ -277,37 +321,79 @@ class NativeEmbeddingReranker {
    * @param {string|null} [options.cacheDir=null] - Custom model cache directory
    *   - null: Uses './models' in current working directory
    *   - string: Custom path for model storage
+   * @param {Object|null} [options.logger=null] - Custom logger object with debug, info, warn, error methods
+   *   - null: Uses default console-based logger
+   *   - object: Custom logger (e.g., Winston, Pino, etc.)
+   * @param {string} [options.logLevel='info'] - Log level when using default logger
+   *   - 'debug': Verbose logging for troubleshooting
+   *   - 'info': Standard operational messages (default)
+   *   - 'warn': Warning messages only
+   *   - 'error': Error messages only
+   *   - 'silent': No logging
    * 
    * @example
-   * // Default MixedBread model
+   * // Default MixedBread model with info logging
    * const reranker = new NativeEmbeddingReranker();
    * 
-   * // Specific model selection
+   * // Specific model with custom log level
    * const reranker = new NativeEmbeddingReranker({
-   *   model: 'Xenova/ms-marco-MiniLM-L-6-v2'
+   *   model: 'Xenova/ms-marco-MiniLM-L-6-v2',
+   *   logLevel: 'debug'
    * });
    * 
-   * // Custom cache directory
+   * // Production setup with custom logger and cache directory
    * const reranker = new NativeEmbeddingReranker({
    *   model: 'mixedbread-ai/mxbai-rerank-xsmall-v1',
-   *   cacheDir: '/custom/path/to/models'
+   *   cacheDir: '/custom/path/to/models',
+   *   logger: myWinstonLogger, // Custom logger
+   *   logLevel: 'warn' // Only warnings and errors
+   * });
+   * 
+   * // Silent mode for minimal logging
+   * const reranker = new NativeEmbeddingReranker({
+   *   logLevel: 'silent'
    * });
    */
   constructor(options = {}) {
-    // Destructure modelName and cacheDir from options
+    // Destructure options with new logging parameters
     const { 
       cacheDir = null, 
-      model = 'mixedbread-ai/mxbai-rerank-xsmall-v1' // Default model
+      model = 'mixedbread-ai/mxbai-rerank-xsmall-v1', // Default model
+      logger = null, // Allow custom logger
+      logLevel = 'info' // Default log level
     } = options;
 
     this.model = model; // Store the model name
     this.cacheDir = cacheDir;
+    this.logLevel = logLevel; // <-- Add this line
 
-    // Pass the model name to the ModelLoader
+    // --- Professional Logger Logic ---
+    // If a custom logger isn't provided, create a simple default one
+    this.logger = logger || this.createDefaultLogger(logLevel);
+
+    // Pass the model name and logger to the ModelLoader
     this.modelLoader = new ModelLoader({ 
       modelName: this.model, 
-      cacheDir: this.cacheDir 
+      cacheDir: this.cacheDir,
+      logger: this.logger // Pass logger down to ModelLoader
     });
+  }
+
+  /**
+   * Create a default logger with configurable log levels
+   * @param {string} level - Log level: 'debug', 'info', 'warn', 'error', 'silent'
+   * @returns {Object} Logger object with debug, info, warn, error methods
+   */
+  createDefaultLogger(level) {
+    const levels = { 'debug': 1, 'info': 2, 'warn': 3, 'error': 4, 'silent': 5 };
+    const currentLevel = levels[level] || 2;
+    
+    return {
+      debug: (message) => currentLevel <= 1 && console.debug(`[DEBUG] ${message}`),
+      info:  (message) => currentLevel <= 2 && console.info(`[INFO] ${message}`),
+      warn:  (message) => currentLevel <= 3 && console.warn(`[WARN] ${message}`),
+      error: (message) => currentLevel <= 4 && console.error(`[ERROR] ${message}`)
+    };
   }
 
   /**
@@ -324,13 +410,14 @@ class NativeEmbeddingReranker {
    * await reranker.initialize(); // Required before rerank()
    */
   async initialize() {
-    console.log('Initializing NativeEmbeddingReranker...');
+    this.logger.info('Initializing NativeEmbeddingReranker...');
     await this.modelLoader.initialize();
-    console.log('Reranker ready');
+    this.logger.info('Reranker ready');
   }
 
   /**
    * Reranks a list of documents based on semantic relevance to the query using cross-encoder models.
+   * Now with batching support for scalability.
    * 
    * INPUT SIGNATURE:
    * @param {string} query - The search query or question to rerank documents against
@@ -340,26 +427,27 @@ class NativeEmbeddingReranker {
    *   - Mixed format supported
    * @param {Object} [options] - Optional configuration object
    * @param {number} [options.topK=4] - Maximum number of top-ranked documents to return
+   * @param {number} [options.batchSize=128] - Number of documents to process in a single batch
    * 
    * OUTPUT FORMAT:
    * @returns {Promise<Array<{
-   *   rerank_corpus_id: number,     // Original index position in input array
-   *   rerank_score: number,         // Relevance score (higher = more relevant)
+   *   _rerank_corpus_id: number,    // Original index position in input array  
+   *   _rerank_score: number,        // Relevance score (higher = more relevant)
    *   text: string,                 // Document text content
    *   ...originalProperties         // Any additional properties from input objects
    * }>>} Array of reranked documents, sorted by relevance score (descending)
    * 
    * EXAMPLE USAGE:
    * ```javascript
-   * // String array input
+   * // String array input with custom batch size
    * const results = await reranker.rerank(
    *   "How does AI work?",
    *   ["AI uses algorithms", "Cooking is fun", "Machine learning trains models"],
-   *   { topK: 2 }
+   *   { topK: 2, batchSize: 64 }
    * );
    * // Returns: [
-   * //   { rerank_corpus_id: 0, rerank_score: 0.95, text: "AI uses algorithms" },
-   * //   { rerank_corpus_id: 2, rerank_score: 0.87, text: "Machine learning trains models" }
+   * //   { _rerank_corpus_id: 0, _rerank_score: 0.95, text: "AI uses algorithms" },
+   * //   { _rerank_corpus_id: 2, _rerank_score: 0.87, text: "Machine learning trains models" }
    * // ]
    * 
    * // Object array input with metadata preservation
@@ -371,14 +459,15 @@ class NativeEmbeddingReranker {
    *   ]
    * );
    * // Returns: [
-   * //   { rerank_corpus_id: 0, rerank_score: 0.92, text: "Python is...", id: "doc1", category: "tech" }
+   * //   { _rerank_corpus_id: 0, _rerank_score: 0.92, text: "Python is...", id: "doc1", category: "tech" }
    * // ]
    * ```
    * 
    * PERFORMANCE NOTES:
    * - MixedBread model (default): ~25-50 documents/second, higher confidence scores
    * - MS-MARCO model: ~90-150 documents/second, score range 0.0-1.0
-   * - Batch processing is optimized for arrays up to 1000+ documents
+   * - Batch processing prevents memory issues when handling thousands of documents
+   * - Default batch size is 128 documents per batch for optimal memory usage
    * - Empty input returns empty array immediately
    */
   async rerank(query, documents, options = {}) {
@@ -386,40 +475,66 @@ class NativeEmbeddingReranker {
       return [];
     }
     
-    const { topK = 4 } = options;
-    const start = performance.now();
+    // Destructure options with sensible defaults
+    const { topK = 4, batchSize = 128 } = options;
+    const start = now();
     
-    console.log(`Reranking ${documents.length} documents for query: "${query}"`);
+    this.logger.info(`Reranking ${documents.length} documents for query: "${query}" with batch size ${batchSize}`);
 
     try {
-      // Create query-document pairs for getScores
-      const queryDocPairs = documents.map(doc => {
-        const text = typeof doc === 'string' ? doc : doc.text;
-        return [query, text];
-      });
-
-      // Delegate core inference to ModelLoader
-      const results = await this.modelLoader.getScores(queryDocPairs);
-
-      // Process scores and format the output
-      const reranked = results
-        .map((result, i) => ({
-          rerank_corpus_id: i,
-          rerank_score: result.score,
-          ...(typeof documents[i] === 'string' ? { text: documents[i] } : documents[i]),
-        }))
-        .sort((a, b) => b.rerank_score - a.rerank_score)
-        .slice(0, topK);
-
-      const duration = performance.now() - start;
-      console.log(`Reranking ${documents.length} documents to top ${topK} took ${duration.toFixed(2)}ms`);
-      console.log(`  Top result score: ${reranked[0]?.rerank_score.toFixed(4) || 'N/A'}`);
+      // --- Core Batching Logic ---
       
-      // Return the final, sorted array of documents
-      return reranked;
+      // 1. Create an array to hold results from all batches
+      let allResults = [];
+
+      // 2. Loop through the documents in chunks of batchSize
+      for (let i = 0; i < documents.length; i += batchSize) {
+        const chunkStart = i;
+        const chunkEnd = Math.min(i + batchSize, documents.length);
+        
+        // Get the current chunk of documents
+        const chunk = documents.slice(chunkStart, chunkEnd);
+        this.logger.debug(`Processing batch ${Math.floor(i / batchSize) + 1}: documents ${chunkStart + 1}-${chunkEnd}`);
+
+        // Create query-document pairs for the current chunk
+        const queryDocPairs = chunk.map(doc => {
+          const text = typeof doc === 'string' ? doc : doc.text;
+          return [query, text];
+        });
+
+        // Get scores for the current chunk
+        const chunkScores = await this.modelLoader.getScores(queryDocPairs);
+
+        // Process and store results for this chunk, making sure to use the original index
+        const chunkResults = chunkScores.map((result, j) => {
+          const originalIndex = chunkStart + j;
+          return {
+            // --- API Namespacing: Use underscores to prevent field collisions ---
+            _rerank_corpus_id: originalIndex,
+            _rerank_score: result.score,
+            ...(typeof documents[originalIndex] === 'string' ? { text: documents[originalIndex] } : documents[originalIndex]),
+          };
+        });
+
+        allResults.push(...chunkResults);
+      }
+      
+      // --- Final Processing ---
+      
+      // 3. Now, sort all the collected results together
+      const reranked = allResults.sort((a, b) => b._rerank_score - a._rerank_score);
+      
+      // 4. Finally, slice to get the topK results
+      const finalTopK = reranked.slice(0, topK);
+
+      const duration = now() - start;
+      this.logger.info(`Reranking ${documents.length} documents to top ${topK} took ${duration.toFixed(2)}ms`);
+      this.logger.debug(`Top result score: ${finalTopK[0]?._rerank_score.toFixed(4) || 'N/A'}`);
+      
+      return finalTopK;
 
     } catch (error) {
-      console.error('Reranking failed:', error);
+      this.logger.error(`Reranking failed: ${error.message}`);
       throw error;
     }
   }
@@ -444,13 +559,49 @@ class NativeEmbeddingReranker {
    */
   async preload() {
     try {
-      console.log('Preloading reranker suite...');
+      this.logger.info('Preloading reranker suite...');
       await this.initialize();
-      console.log('Preloaded reranker suite. Reranking is available as a service now.');
+      this.logger.info('Preloaded reranker suite. Reranking is available as a service now.');
     } catch (e) {
-      console.error('Failed to preload reranker suite:', e);
-      console.log('Reranking will be available on the first rerank call.');
+      this.logger.error(`Failed to preload reranker suite: ${e.message}`);
+      this.logger.warn('Reranking will be available on the first rerank call.');
     }
+  }
+
+  /**
+   * Unload the associated model from memory and clear it from the cache.
+   * Useful in long-running applications to manage memory usage.
+   * 
+   * @example
+   * const reranker = new NativeEmbeddingReranker();
+   * await reranker.initialize();
+   * // ... use the reranker ...
+   * 
+   * // When shutting down or switching models:
+   * reranker.dispose(); // Frees up memory
+   */
+  dispose() {
+    this.logger.info(`Disposing model: ${this.model}`);
+    ModelLoader.clearCache(this.model);
+    this.logger.debug('Model resources have been released from memory');
+  }
+
+  /**
+   * Get information about the current model and cache status
+   * @returns {Object} Model information and cache statistics
+   */
+  getModelInfo() {
+    const cachedModels = ModelLoader.getCachedModels();
+    const isLoaded = this.modelLoader.isLoaded();
+    
+    return {
+      currentModel: this.model,
+      isLoaded: isLoaded,
+      cacheDirectory: this.cacheDir,
+      totalCachedModels: cachedModels.length,
+      cachedModels: cachedModels,
+      logLevel: this.logLevel // <-- Change this line
+    };
   }
 }
 

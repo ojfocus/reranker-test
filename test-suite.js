@@ -681,11 +681,11 @@ async function runRerankerTest() {
       const relevanceIcon = doc.expected_relevance === 'high' ? '🟢' : 
                            doc.expected_relevance === 'medium' ? '🟡' : '🔴';
       const truncatedText = doc.text.length > 60 ? doc.text.substring(0, 60) + '...' : doc.text;
-      console.log(`   ${idx + 1}. ${relevanceIcon} Score: ${doc.rerank_score.toFixed(4)} | ${truncatedText}`);
+      console.log(`   ${idx + 1}. ${relevanceIcon} Score: ${doc._rerank_score.toFixed(4)} | ${truncatedText}`);
     });
     
     // Score distribution analysis
-    const scores = rerankedResults.map(r => r.rerank_score);
+    const scores = rerankedResults.map(r => r._rerank_score);
     const avgScore = scores.reduce((sum, s) => sum + s, 0) / scores.length;
     const maxScore = Math.max(...scores);
     const minScore = Math.min(...scores);
