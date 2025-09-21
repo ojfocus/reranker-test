@@ -1,0 +1,25 @@
+{
+  "name": "reranker-test",
+  "version": "1.0.0",
+  "description": "Benchmarking project for Xenova/ms-marco-MiniLM-L-6-v2 cross-encoder model",
+  "main": "reranker.js",
+  "type": "module",
+  "scripts": {
+    "start": "node reranker.js",
+    "test": "node reranker.js",
+    "test:quick": "node reranker.js --quick",
+    "test:full": "node reranker.js --full",
+    "benchmark": "node reranker.js --full"
+  },
+  "keywords": [
+    "transformers",
+    "reranking",
+    "benchmark",
+    "nlp"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@xenova/transformers": "^2.17.2"
+  }
+}
